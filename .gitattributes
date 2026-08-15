@@ -1,0 +1,14 @@
+# Normalización de finales de línea. Importa de verdad: el plan contempla
+# compilar los targets de iOS en macOS, y un `gradlew` con CRLF no arranca allí.
+* text=auto eol=lf
+
+*.bat text eol=crlf
+gradlew text eol=lf
+
+*.jar binary
+*.png binary
+*.jpg binary
+*.onnx binary
+*.hgt binary
+*.blk binary
+*.peakpack binary
