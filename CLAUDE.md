@@ -44,22 +44,31 @@ Regla: **ningún punto del motor portado usa `% 360.0` ni
 `(x + 180) % 360 - 180` directamente.** Siempre `normalizeAzimuthDeg` y
 `wrapDeltaDeg` de `peakid.engine.geo`.
 
-### El test de simetría no vigila el convenio de `atan2`
+### El caso 3 no vigila el convenio de `atan2`, y el caso 4 solo a medias
 
-De los siete casos dorados, **solo el caso 2 vigila el orden de los argumentos
-de `atan2`**, y lo hace por su valor concreto de 336°. Comprobado con
-mutaciones:
+Comprobado con mutaciones en los dos lenguajes, no deducido.
 
 - El **caso 3 (simetría)** pasa igual de verde con el convenio girado:
-  intercambiar los argumentos refleja el azimut al convenio matemático y la
-  propiedad ida/vuelta = 180° se conserva bajo esa reflexión.
-- El **caso 4 (sentido)** tampoco lo caza: solo ejercita
-  `destination_point_deg` y nunca llama a `azimuth_deg`.
+  intercambiar los argumentos de `atan2` refleja el azimut al convenio
+  matemático y la propiedad ida/vuelta = 180° se conserva bajo esa reflexión.
+- El **caso 4 tiene dos lecturas y hacen falta las dos.** La del azimut
+  (rumbos cardinales: norte da 0°, este da 90°) sí caza la mutación. La de
+  `destination_point` (avanzar con azimut 0° sube la latitud) NO la caza,
+  porque nunca llama a `azimuth_deg`.
 
-Por eso el puerto añade **ida y vuelta** como segundo guardián independiente
-(`caso4_idaYVueltaRecuperaElPuntoDePartida`): avanzar a un rumbo conocido con
-`destinationPointDeg` y comprobar que `azimuthDeg` lo recupera. Cruza las dos
-funciones y caza tanto el `atan2` cambiado como el `%` de arriba.
+**Esto ya se cobró una pieza.** El primer puerto de `geo` implementó el caso 4
+solo en su lectura de `destination_point`, siguiendo el enunciado del contrato
+al pie de la letra, y perdió un guardián sin que nada avisara: 15 tests en
+verde y el caso figurando como cubierto. El enunciado sugiere esa mitad; los
+tests de Python tenían las dos. De ahí la regla:
+
+> **Al portar, portar contra los TESTS, no contra el enunciado del contrato.**
+> Y comprobar con una mutación que el caso portado caza lo mismo que cazaba el
+> original.
+
+Hoy el convenio tiene tres guardianes en Kotlin (`caso2_azimut`,
+`caso4_sentidoDelAzimutEnRumbosCardinales`, `caso4_idaYVueltaRecuperaElPuntoDePartida`),
+los mismos que en Python.
 
 Al portar un módulo nuevo, la pregunta no es "¿pasan los tests?" sino **"¿qué
 mutación tendría que hacer para que fallaran?"**. Si no hay ninguna, el test no

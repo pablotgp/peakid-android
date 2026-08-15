@@ -118,6 +118,27 @@ class GeoGoldenTest {
     }
 
     // ---- Caso 4: sentido ---------------------------------------------------
+    //
+    // El caso 4 tiene DOS lecturas y en Python están las dos: `test_sentido`
+    // comprueba el AZIMUT hacia rumbos cardinales, y `test_destino_sentido`
+    // comprueba que avanzar con un rumbo mueve la coordenada en el sentido
+    // correcto. Portar solo la segunda pierde un guardián del convenio de
+    // `atan2` — medido: con los argumentos intercambiados, `test_sentido` cae
+    // (90.0 donde se esperaba 0.0) y la lectura de `destination_point` pasa
+    // verde, porque no llama a `azimuth_deg` en ningún momento.
+
+    @Test
+    fun caso4_sentidoDelAzimutEnRumbosCardinales() {
+        // Norte: exacto en cualquier latitud (mismo meridiano).
+        assertEquals(0.0, azimuthDeg(40.0, -3.0, 41.0, -3.0), 1e-9)
+        // Este/oeste: solo exacto en el ecuador, porque los meridianos
+        // convergen y el azimut inicial de un círculo máximo se desvía.
+        assertEquals(90.0, azimuthDeg(0.0, 0.0, 0.0, 1.0), 1e-9)
+        assertEquals(270.0, azimuthDeg(0.0, 0.0, 0.0, -1.0), 1e-9)
+        // Sur: el que cruza el corte de 0/360, donde el `%` mal portado
+        // también se manifiesta.
+        assertEquals(180.0, azimuthDeg(40.0, -3.0, 39.0, -3.0), 1e-9)
+    }
 
     @Test
     fun caso4_azimutCeroSubeLaLatitud() {
