@@ -73,3 +73,45 @@ los mismos que en Python.
 Al portar un módulo nuevo, la pregunta no es "¿pasan los tests?" sino **"¿qué
 mutación tendría que hacer para que fallaran?"**. Si no hay ninguna, el test no
 mide nada.
+
+### Portar "los tests" tampoco basta si te dejas uno
+
+El motor tiene TRES tests contra el panorama de PeakFinder y no dos. Al portar
+`horizon` se portaron los dos evidentes —azimuts y "el perfil alcanza cada
+cima"— y se dejó fuera `test_peakfinder_visibilidad`, que recorre el rayo hasta
+cada cima con `check_visibility`.
+
+Ese tercero es **el único guardián de `SUMMIT_MARGIN_M`**. Sin él, quitar el
+margen de cima no rompía absolutamente nada: 50 tests en verde con el
+auto-bloqueo reintroducido. Con él puesto, la misma mutación tumba 16 de las 72
+cimas, tres de ellas dominantes.
+
+Las dos preguntas se parecen y no son la misma: **"¿el horizonte llega a la
+altura de esta cima?" es una propiedad del BARRIDO; "¿esta cima se ve?" recorre
+el rayo hasta ella**, y es ahí donde vive el auto-bloqueo. Al portar, contar los
+tests del original, no solo leerlos.
+
+### Un test sobre datos uniformes puede no medir nada
+
+El guardián del sector que cruza el norte se escribió sobre un paquete
+sintético de mar llano, comparando la elevación devuelta contra la de la muestra
+esperada. Como **todas las elevaciones valían lo mismo**, la comparación se
+cumplía eligiera la muestra que eligiera: parecía vigilar el cruce del norte y
+no vigilaba nada. Lo delató una mutación (`%` a pelo en la distancia angular)
+que ese test dejó pasar y solo cazaron las 72 cimas, sobre terreno real.
+
+Regla: **un test sobre datos constantes no distingue el acierto del azar.** Si
+el dato de prueba es liso, el fixture es el que hay que arreglar. Ahora el
+guardián usa un perfil fabricado con una elevación distinta por muestra y
+comprueba el índice elegido, no un valor que coincidiría igualmente.
+
+### Otras dos, menores pero medidas
+
+- **El paquete es LITTLE-endian; los `.hgt` son BIG-endian.** Conviven las dos
+  convenciones en el proyecto. Leer el paquete al revés no revienta: 2065 sale
+  como 4360, que sigue pareciendo una altitud. El `dtype` se lee del manifest y
+  no se supone.
+- **Charset por defecto de la plataforma.** En JDK 17 sobre Windows en español
+  el defecto es windows-1252, y `bufferedReader()` convertía "Mojón de tres
+  Términos" en "MojÃ³n". Los nombres de cima son claves de búsqueda en los
+  tests, así que toda lectura de texto va con UTF-8 explícito.
