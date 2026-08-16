@@ -257,6 +257,52 @@ portado caza lo que cazaba el original.
 `test_destino_ida_y_vuelta` es el tercer guardián y cruza las dos funciones,
 así que caza el `atan2` cambiado Y el `%` de la sección de ángulos.
 
+## Al portar, CONTAR los tests del original
+
+Ampliación de la regla anterior, y la segunda vez que el mismo patrón se cobra
+una pieza. No basta con portar contra los tests en vez de contra el enunciado:
+hay que **contar cuántos tests cubren cada caso**, porque traducir los que uno
+identifica deja fuera los que no.
+
+**Contra el panorama de PeakFinder hay TRES tests, no dos.** Los dos evidentes
+—`test_peakfinder_azimuts` y `test_peakfinder_perfil_alcanza_las_cimas`— son los
+que se portaron a Kotlin. El tercero, `test_peakfinder_visibilidad`, recorre el
+rayo hasta cada cima con `check_visibility`, y es **el único guardián de
+`SUMMIT_MARGIN_M` en todo el proyecto.**
+
+Medido con la mutación: sin ese tercero, quitar el margen de cima no rompía
+nada, con 50 tests en verde y el auto-bloqueo reintroducido. Con él puesto, la
+misma mutación tumba 16 de las 72 cimas, tres de ellas dominantes.
+
+Las dos preguntas se parecen y NO son la misma:
+
+- «¿el horizonte llega a la altura de esta cima?» es una propiedad del
+  **barrido**: mira el máximo del perfil en un azimut.
+- «¿esta cima se ve?» **recorre el rayo hasta ella**, y es ahí donde vive el
+  auto-bloqueo de la ladera del propio pico.
+
+Un caso del contrato puede necesitar varios tests porque tiene varias lecturas
+—ya pasó con el caso 4— o porque valida etapas distintas del mismo camino, como
+aquí. Antes de dar un módulo por portado: contar.
+
+## Un guardián sobre datos uniformes no mide nada
+
+El test del sector que cruza el norte, en el puerto, se escribió sobre un
+paquete sintético de **mar llano** y comparaba la elevación devuelta contra la
+de la muestra esperada. Como todas las elevaciones valían lo mismo, la
+comparación se cumplía **eligiera la muestra que eligiera**: parecía vigilar el
+cruce del norte y no vigilaba nada.
+
+Lo delató una mutación (`%` a pelo en la distancia angular) que ese test dejó
+pasar y que solo cazaron las 72 cimas, sobre terreno real.
+
+Regla: **un test sobre datos constantes no distingue el acierto del azar.** Si
+el dato de prueba es liso, lo que hay que arreglar es el fixture. El sustituto
+usa un perfil fabricado con una elevación distinta por muestra y comprueba el
+ÍNDICE elegido, no un valor que coincidiría igualmente. Es el mismo criterio que
+el patrón `(fila*7 + columna*13)` de los tiles sintéticos, y por el mismo
+motivo.
+
 ---
 
 # TRABAJO
@@ -415,6 +461,95 @@ Casi siempre es 1, 2 o 3.
     src/peaks/    Overpass, recolocación, filtrado
     src/render/   PNG del perfil del horizonte
     src/align/    alineamiento foto↔horizonte, detectores de cresta
+    src/pack/     lectura de paquetes de región (lo que consumirá la app)
+
+## Paquetes de región
+
+`scripts/build_pack.py` genera lo que consumirá la app: terreno recortado al
+radio útil con resolución escalonada, cimas ya recolocadas y con la altitud
+decidida, y una declaración explícita de dónde NO hay datos. Medido para la
+Axarquía (centro 36.748/−4.086, radio 130 km): **32.4 MB en 91 bloques**, frente
+a los ~311 MB de los 12 tiles fuente.
+
+- **Bloques de 0.25° alineados a una retícula GLOBAL** (múltiplos de 0.25 desde
+  0, no relativos al centro). Como 0.25 divide a 1°, **cada bloque cae entero
+  dentro de un solo tile** y su origen cae sobre filas y columnas enteras del
+  `.hgt`. De ahí cuelga todo: extraer un tier es un slice con paso sobre el
+  memmap. `build_pack` lo AFIRMA en vez de confiarlo — un bloque a caballo
+  daría un array del tamaño correcto con terreno de otro sitio, en silencio.
+  `block_deg` debe dividir a 1°, y `block_deg·3600` ser divisible por el arcsec
+  de cada tier.
+- **Diezmado, nunca promediado ni máximo.** El paquete NO contiene ningún valor
+  calculado, solo nodos SRTM seleccionados; los voids pasan tal cual. Promediar
+  rebajaría las cimas (SRTM ya las subestima) y el máximo las inflaría.
+  Consecuencia útil: el tier de 1 arcsec es **bit a bit idéntico** a `src/dem`,
+  así que su validación no es una tolerancia sino una igualdad, y caza
+  cualquier fallo de indexado.
+- **Little-endian (`<i2`), distinto a los `.hgt` a propósito**: los publica la
+  NASA en big-endian, pero esto lo consume un móvil y un byteswap por muestra
+  es desperdicio. Leerlo como `>i2` da números plausibles y equivocados, así que
+  el dtype va en el manifest y el lector lo comprueba. `VOID = −32768` se
+  conserva, para que la semántica de void viaje sin cambios.
+- **UN PAQUETE SIRVE A SU COMARCA, NO A TODO SU RADIO DE TERRENO.** Es el
+  hallazgo que más cambia el diseño y el que no se ve viniendo. Hay **TRES
+  radios y no son intercambiables**:
+
+      terrain_radius_m   130 km   hasta dónde llega el TERRENO
+      peaks_radius_m     100 km   hasta dónde llega el REGISTRO DE CIMAS
+      observer_radius_m   25 km   dónde puede PONERSE el usuario   <-- este manda
+
+  El tercero es el que limita el producto y el fácil de pasar por alto. Como el
+  tier se asigna por distancia al CENTRO, quien se aleja tiene su terreno
+  CERCANO en resolución gruesa — y con el ojo bajo el horizonte lo domina
+  justamente el terreno cercano. Medido con t1 a 25 km: a 0, 10, 20 y 30 km del
+  centro el perfil de 360° sale EXACTO; a 45 km se descuadra 0.69°, y desde el
+  observador real a 104 km, **4.08°**, que es un error de identificación, no un
+  matiz. Tener terreno de una montaña NO significa poder mirarla desde
+  cualquier sitio que esté dentro del paquete.
+- **`observer_radius_m` es un parámetro explícito, no el corte de t1.** Coinciden
+  por defecto, y ese es su TOPE (`build_pack` rechaza prometer más, porque fuera
+  de t1 el bloque bajo los pies del usuario es grueso). Pero son cosas distintas
+  y no comparten variable: el corte de t1 se mueve por tamaño del paquete, y la
+  promesa solo debe moverse cuando alguien decide prometer otra cosa. Acoplados,
+  ensanchar un tier para ahorrar megas cambiaría en silencio a quién sirve el
+  paquete. Hay test.
+- **Implicación de producto**, escrita para el repo de la app en
+  [docs/PAQUETES_Y_UBICACION.md](docs/PAQUETES_Y_UBICACION.md): la app descarga
+  el paquete según **dónde está el usuario**, no según qué montañas quiere ver,
+  y avisa si su posición cae fuera del radio de observador de los paquetes que
+  tiene.
+- **`coverage.bin` es índice y cobertura a la vez** (un bloque existe si y solo
+  si tiene datos), y cubre los dos motivos de ausencia: fuera del radio, o tile
+  fuente ausente. La cobertura PARCIAL dentro de un bloque no necesita
+  mecanismo nuevo: las muestras sin dato son `VOID`. Un bloque ausente lanza
+  `BlockNotFoundError`, que **hereda de `TileNotFoundError`** para que el código
+  que ya distinguía cobertura de void siga produciendo `UNKNOWN` sin cambios.
+- **El manifest se VERIFICA, no se transporta.** Lleva las constantes del motor
+  y `open_pack` falla si difieren de las vivas. Un paquete construido con
+  `k = 0.13` leído por un motor con otro valor da resultados plausibles y
+  equivocados.
+- **El registro de cimas no puede mentir por omisión.** Si `peaks_radius_m` es
+  menor que el de terreno, en esa corona el paquete NO SABE si hay cimas.
+  `peaks_near` devuelve un `PeakQuery` con `complete=False` en vez de una lista
+  pelada, y `peak_data_limit_m` dice a qué distancia por cada rumbo se acaba el
+  registro — análogo directo de `truncated_at_m`. Una lista vacía nunca puede
+  leerse como "aquí no hay cimas" cuando es "aquí no lo sé".
+
+### Criterio de aceptación de un paquete
+
+**El perfil de horizonte en posiciones REALES, no la coincidencia punto a
+punto.** `scripts/validate_pack.py` hace las dos, en ese orden, y la primera es
+la que decide: el horizonte es un MÁXIMO a lo largo del rayo, y un máximo no
+perdona una arista perdida. Un paquete puede cuadrar en 10 000 puntos sueltos y
+aun así arruinar un horizonte — de hecho fue así como se descubrió lo del
+`observer_radius_m`, que los puntos sueltos no habrían delatado jamás.
+
+Los observadores de prueba son los cinco de `Dataset/`, que son posiciones de
+fotos reales; solo deciden los que caen dentro del radio de observador. Medido
+en la Axarquía: los tres servidos dan `|Δ| = 0.0000°` en los 1800 azimuts, y por
+tier, sobre 10 000 puntos, **t1 exacto (0.00 m), t2 p99 5.13 m / máx 12.82 m, t3
+p99 9.80 m / máx 20.61 m**. Las cotas del script salen de esa medida, no de la
+teoría: una cota inventada a priori no comprobaría nada.
 
 ## Roles de cada fuente de datos
 

@@ -74,36 +74,49 @@ Al portar un módulo nuevo, la pregunta no es "¿pasan los tests?" sino **"¿qu�
 mutación tendría que hacer para que fallaran?"**. Si no hay ninguna, el test no
 mide nada.
 
-### Portar "los tests" tampoco basta si te dejas uno
+### Al portar, CONTAR los tests del original
 
-El motor tiene TRES tests contra el panorama de PeakFinder y no dos. Al portar
-`horizon` se portaron los dos evidentes —azimuts y "el perfil alcanza cada
-cima"— y se dejó fuera `test_peakfinder_visibilidad`, que recorre el rayo hasta
-cada cima con `check_visibility`.
+Ampliación de la regla anterior, y la segunda vez que el mismo patrón se cobra
+una pieza. No basta con portar contra los tests en vez de contra el enunciado:
+hay que **contar cuántos tests cubren cada caso**, porque traducir los que uno
+identifica deja fuera los que no.
 
-Ese tercero es **el único guardián de `SUMMIT_MARGIN_M`**. Sin él, quitar el
-margen de cima no rompía absolutamente nada: 50 tests en verde con el
-auto-bloqueo reintroducido. Con él puesto, la misma mutación tumba 16 de las 72
+**Contra el panorama de PeakFinder hay TRES tests, no dos.** Se portaron los dos
+evidentes —azimuts y "el perfil alcanza cada cima"— y quedó fuera
+`test_peakfinder_visibilidad`, que recorre el rayo hasta cada cima con
+`check_visibility`. Ese tercero es **el único guardián de `SUMMIT_MARGIN_M` en
+todo el proyecto.**
+
+Medido: sin él, quitar el margen de cima no rompía nada — 50 tests en verde con
+el auto-bloqueo reintroducido. Con él, la misma mutación tumba 16 de las 72
 cimas, tres de ellas dominantes.
 
-Las dos preguntas se parecen y no son la misma: **"¿el horizonte llega a la
-altura de esta cima?" es una propiedad del BARRIDO; "¿esta cima se ve?" recorre
-el rayo hasta ella**, y es ahí donde vive el auto-bloqueo. Al portar, contar los
-tests del original, no solo leerlos.
+Las dos preguntas se parecen y NO son la misma:
 
-### Un test sobre datos uniformes puede no medir nada
+- «¿el horizonte llega a la altura de esta cima?» es una propiedad del
+  **barrido**: mira el máximo del perfil en un azimut.
+- «¿esta cima se ve?» **recorre el rayo hasta ella**, y ahí vive el auto-bloqueo
+  de la ladera del propio pico.
 
-El guardián del sector que cruza el norte se escribió sobre un paquete
-sintético de mar llano, comparando la elevación devuelta contra la de la muestra
-esperada. Como **todas las elevaciones valían lo mismo**, la comparación se
-cumplía eligiera la muestra que eligiera: parecía vigilar el cruce del norte y
-no vigilaba nada. Lo delató una mutación (`%` a pelo en la distancia angular)
-que ese test dejó pasar y solo cazaron las 72 cimas, sobre terreno real.
+Un caso del contrato puede necesitar varios tests porque tiene varias lecturas
+—ya pasó con el caso 4— o porque valida etapas distintas del mismo camino, como
+aquí. Antes de dar un módulo por portado: contar.
+
+### Un guardián sobre datos uniformes no mide nada
+
+El test del sector que cruza el norte se escribió sobre un paquete sintético de
+**mar llano** y comparaba la elevación devuelta contra la de la muestra
+esperada. Como todas las elevaciones valían lo mismo, la comparación se cumplía
+**eligiera la muestra que eligiera**: parecía vigilar el cruce del norte y no
+vigilaba nada. Lo delató una mutación (`%` a pelo en la distancia angular) que
+ese test dejó pasar y que solo cazaron las 72 cimas, sobre terreno real.
 
 Regla: **un test sobre datos constantes no distingue el acierto del azar.** Si
-el dato de prueba es liso, el fixture es el que hay que arreglar. Ahora el
-guardián usa un perfil fabricado con una elevación distinta por muestra y
-comprueba el índice elegido, no un valor que coincidiría igualmente.
+el dato de prueba es liso, lo que hay que arreglar es el fixture. El sustituto
+usa un perfil fabricado con una elevación distinta por muestra y comprueba el
+ÍNDICE elegido, no un valor que coincidiría igualmente. Mismo criterio que el
+patrón `(fila*7 + columna*13)` de los tiles sintéticos del motor, y por el mismo
+motivo.
 
 ### Otras dos, menores pero medidas
 
