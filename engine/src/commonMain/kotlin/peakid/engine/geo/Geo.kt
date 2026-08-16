@@ -45,6 +45,12 @@ private fun radians(deg: Double): Double = deg * DEG_TO_RAD
 
 private fun degrees(rad: Double): Double = rad * RAD_TO_DEG
 
+/** Grados a radianes. Públicas porque `align/` también las necesita, y la
+ * regla del proyecto es que los radianes no salgan de donde se calculan. */
+fun degToRad(deg: Double): Double = deg * DEG_TO_RAD
+
+fun radToDeg(rad: Double): Double = rad * RAD_TO_DEG
+
 /**
  * Normaliza un azimut a `[0, 360)`.
  *

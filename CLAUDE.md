@@ -118,6 +118,36 @@ usa un perfil fabricado con una elevación distinta por muestra y comprueba el
 patrón `(fila*7 + columna*13)` de los tiles sintéticos del motor, y por el mismo
 motivo.
 
+### Sustituir un dato de prueba puede desactivar la métrica que lo usa
+
+Los cuatro tests de búsqueda del motor extraen la cresta con el detector
+heurístico, que aquí no se porta. Se sustituyó por la línea proyectada, que es
+más limpia — y **rompió el test de ambigüedad sin tocar la búsqueda**.
+
+El motivo: con una cresta exacta el error del mejor candidato sale **cero**, y
+el margen de ambigüedad es RELATIVO, `(alternativa − mejor) / mejor`. Cero en el
+denominador da infinito, la búsqueda nunca puede declararse ambigua y el test
+pasa a medir nada. En Python no ocurre porque ningún detector devuelve filas
+fraccionarias: la cresta viene cuantizada a píxeles enteros y el error nunca
+es 0.
+
+La corrección es cuantizar la cresta sintética, que es la cantidad mínima de
+realismo que hace significativa la métrica. Regla: **al sustituir un dato de
+prueba por otro "mejor", comprobar qué propiedades del original usaba la
+métrica.** Una entrada más limpia que la real puede degenerar el criterio en vez
+de afinarlo.
+
+### Los bordes del campo no distinguen pinhole de lineal
+
+`az ± hfov/2` cae en `x = W` y `x = 0` con las DOS proyecciones, por
+construcción. El test de centro y bordes —el que uno escribe primero— no puede
+cazar una regresión a la aproximación lineal.
+
+Hace falta un punto INTERMEDIO: a media distancia del borde las dos divergen de
+forma medible (con 65° de campo, ~4% del ancho, unos 150 px en una foto de
+4000). El motor lo tiene documentado en un comentario pero no como test; el
+puerto añade `laProyeccionNoEsLineal`, que es el único que caza esa mutación.
+
 ### Otras dos, menores pero medidas
 
 - **El paquete es LITTLE-endian; los `.hgt` son BIG-endian.** Conviven las dos
