@@ -125,7 +125,28 @@ numéricamente contra la proyección: recupera pitch a 0.02° y giro a 0.1°.
   (`Urriellu_desde_el_Pozo_de_La_Oracion.jpg`): el salto máximo quedaba
   estrangulado en 5 filas, exactamente el tope, con un 2.25% de columnas
   contra él; desatados sube a 13, en línea con las 15 de la heurística, y la
-  pared del picu sale vertical.
+  pared del picu sale vertical. Vigilado por
+  `test_el_tope_de_salto_no_se_ata_a_la_banda`, que reproduce esos números.
+
+  **De las dos mitades del `max`, a 1536 solo trabaja el SUELO.** Medido: el
+  cuanto da banda 5–7 en las seis fotos de referencia, así que `2·banda` queda
+  entre 10 y 14 y nunca se impone sobre el 25. Lo que impide el estrangulado a
+  la resolución de producción es el suelo fijo; el término `2·banda` está
+  LATENTE y solo manda si el cuanto pasa de 6.25 filas — lo que ocurre al
+  bajar la entrada a 512, donde la banda sube a 16.
+
+  Eso importa al portar: **bajar la resolución en el móvil por rendimiento
+  reactiva ese término**, y con él la diferencia entre seguir a la banda y
+  frenarla. Por eso hay DOS tests y no uno: el de arriba vigila el suelo a
+  1536, y `test_el_tope_de_salto_despierta_al_bajar_la_resolucion` vigila el
+  `2·banda` a 512. Un solo test a la resolución de producción saldría verde
+  midiendo media expresión.
+
+  Aviso de método, pagado en su momento: al comprobar esto con una mutación,
+  sustituir `max(25, 2·banda)` por `25` a secas **no rompe nada a 1536**, y es
+  fácil concluir de ahí que el mecanismo ya no se observa. No es esa la
+  mutación: el fallo histórico era `min(25, banda)`, que da un tope de 5. La
+  mutación tiene que ser la del bug, no una vecina suya.
 - Para juzgar un detector hace falta ver la cresta DETECTADA, no solo la
   silueta proyectada: en la GUI con la tecla **C**, y aislada de toda
   proyección con `scripts/dump_skyline.py`. Con un mal encaje, la línea
