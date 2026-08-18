@@ -177,6 +177,9 @@ class Pack internal constructor(
 
     internal fun record(row: Int, col: Int): BlockRecord = coverage[row * cols + col]
 
+    /** El registro por índice ya empaquetado. Ver [blockIndexOf]. */
+    internal fun recordAt(packed: Int): BlockRecord = coverage[packed]
+
     /**
      * ¿Está el observador dentro del radio que este paquete promete servir?
      *
@@ -230,14 +233,30 @@ class Pack internal constructor(
      * respuesta, pero sin ella un punto justo en el borde se sale de la rejilla.
      */
     fun blockOf(latDeg: Double, lonDeg: Double): Pair<Int, Int>? {
+        val packed = blockIndexOf(latDeg, lonDeg)
+        return if (packed < 0) null else Pair(packed / cols, packed % cols)
+    }
+
+    /**
+     * (fila, columna) empaquetados en un `Int`, o −1 si el punto cae fuera.
+     *
+     * SIN ASIGNAR. Existe porque el barrido llama a esto **nueve millones de
+     * veces** por vuelta completa, y devolver un `Pair` significaba nueve
+     * millones de objetos para el recolector. Medido en un Galaxy A17: el
+     * barrido pasó de 28.8 s a lo que mide el test de rendimiento.
+     *
+     * `blockOf` sigue existiendo para quien quiera legibilidad fuera del bucle
+     * caliente, y se apoya en esta.
+     */
+    fun blockIndexOf(latDeg: Double, lonDeg: Double): Int {
         var row = floor((latMaxDeg - latDeg) / blockDeg).toInt()
         var col = floor((lonDeg - lonMinDeg) / blockDeg).toInt()
         val latMin = latMaxDeg - rows * blockDeg
         val lonMax = lonMinDeg + cols * blockDeg
         if (abs(latDeg - latMin) < 1e-9) row = rows - 1
         if (abs(lonDeg - lonMax) < 1e-9) col = cols - 1
-        if (row !in 0 until rows || col !in 0 until cols) return null
-        return Pair(row, col)
+        if (row !in 0 until rows || col !in 0 until cols) return -1
+        return row * cols + col
     }
 
     /**

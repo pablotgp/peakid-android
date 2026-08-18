@@ -148,6 +148,38 @@ forma medible (con 65° de campo, ~4% del ancho, unos 150 px en una foto de
 4000). El motor lo tiene documentado en un comentario pero no como test; el
 puerto añade `laProyeccionNoEsLineal`, que es el único que caza esa mutación.
 
+### El fixture debe cubrir las ORIENTACIONES, no solo variedad de paisaje
+
+Al elegir las fotos de un fixture uno piensa en el contenido —nubes, calima,
+pared vertical, mar— y se olvida de que la foto también trae **geometría**. Son
+dos ejes de cobertura distintos y el segundo no se ve.
+
+Medido, portando `load_oriented_photo`: la tabla de las ocho orientaciones EXIF
+estaba mal escrita en los tres casos que GIRAN los ejes. Con las dimensiones ya
+orientadas `(w, h)`, en las orientaciones 5–8 la imagen cruda mide `(h, w)`, así
+que **la coordenada X del crudo la acota `h` y la Y la acota `w`** — al revés de
+lo que parece al leer el código. Yo escribí `w − 1 − x` sobre el eje que va
+acotado por `h`.
+
+Esta vez reventó con un desbordamiento, que es la suerte. **La variante
+silenciosa del mismo error lee dentro de rango sobre otra parte de la foto** y
+devuelve una cresta perfectamente plausible: una línea continua, con su
+cobertura al 100%, calculada sobre píxeles que no son los que se ven. Nada
+avisa.
+
+Lo único que lo hizo visible es que **dos de las seis fotos de referencia traen
+orientación 6**. Con un fixture de fotos sin girar —que es lo que sale si uno
+elige por paisaje— habría pasado en verde.
+
+Regla: **un fixture de imágenes cubre orientaciones, no solo escenas.** Al menos
+una girada y una sin girar; y si el fixture se regenera o se recorta, comprobar
+que la cobertura de orientaciones sobrevive. Corolario del mismo tipo que «un
+guardián sobre datos uniformes no mide nada»: aquí lo uniforme es la geometría.
+
+La primera aserción del criterio de aceptación es, por eso, que el tamaño
+ORIENTADO coincide con el del fixture — antes de mirar ninguna cresta. Si una
+foto girada entrara sin girar, todo lo demás mediría sobre otra imagen.
+
 ### Otras dos, menores pero medidas
 
 - **El paquete es LITTLE-endian; los `.hgt` son BIG-endian.** Conviven las dos

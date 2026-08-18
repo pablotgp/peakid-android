@@ -43,9 +43,9 @@ class PackTerrain(private val pack: Pack) : TerrainSource {
 
     override fun missingIndex(latDeg: DoubleArray, lonDeg: DoubleArray, count: Int): Int {
         for (i in 0 until count) {
-            val index = pack.blockOf(latDeg[i], lonDeg[i])
-                ?: return i
-            if (!pack.record(index.first, index.second).present) return i
+            val packed = pack.blockIndexOf(latDeg[i], lonDeg[i])
+            if (packed < 0) return i
+            if (!pack.recordAt(packed).present) return i
         }
         return -1
     }
@@ -54,8 +54,7 @@ class PackTerrain(private val pack: Pack) : TerrainSource {
     // rayo van en orden a lo largo del terreno, así que cientos seguidas caen en
     // el mismo bloque. Sin esto, un barrido completo son ~9 millones de búsquedas
     // en tabla hash para resolver siempre lo mismo.
-    private var memoRow = -1
-    private var memoCol = -1
+    private var memoPacked = -1
     private var memoArray: ShortArray? = null
     private var memoSide = 0
     private var memoNorth = 0.0
@@ -81,19 +80,21 @@ class PackTerrain(private val pack: Pack) : TerrainSource {
      * de 32 kilómetros de profundidad.
      */
     fun elevationM(latDeg: Double, lonDeg: Double): Double {
-        val index = pack.blockOf(latDeg, lonDeg)
-            ?: throw BlockNotFoundException(
+        val packed = pack.blockIndexOf(latDeg, lonDeg)
+        if (packed < 0) {
+            throw BlockNotFoundException(
                 "el paquete '${pack.name}' no llega a ($latDeg, $lonDeg)",
             )
-        val (row, col) = index
-        if (row != memoRow || col != memoCol || memoArray == null) {
+        }
+        if (packed != memoPacked || memoArray == null) {
+            val row = packed / pack.cols
+            val col = packed % pack.cols
             memoArray = pack.blockArray(row, col)
             val bounds = pack.blockBounds(row, col)
             memoNorth = bounds.first
             memoWest = bounds.second
-            memoSide = pack.record(row, col).side
-            memoRow = row
-            memoCol = col
+            memoSide = pack.recordAt(packed).side
+            memoPacked = packed
         }
         return bilinear(
             memoArray!!, memoSide, memoNorth, memoWest, pack.blockDeg, latDeg, lonDeg,

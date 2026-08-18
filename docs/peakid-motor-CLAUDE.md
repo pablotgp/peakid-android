@@ -324,6 +324,34 @@ usa un perfil fabricado con una elevación distinta por muestra y comprueba el
 el patrón `(fila*7 + columna*13)` de los tiles sintéticos, y por el mismo
 motivo.
 
+## Un fixture de fotos cubre ORIENTACIONES, no solo escenas
+
+Aplicación del mismo principio a `tests/data/cresta_referencia.json`, y la
+segunda vez que el criterio de selección de ese fixture se queda corto.
+
+Ya pasó una vez: las fotos se eligieron por «tener alineamiento manual» en vez
+de por «recorrer este código», y así quedó fuera la del Picu Urriellu, que es el
+caso de pared vertical. De ahí la lista `EXTRA` de `scripts/freeze_skyline.py`,
+donde cada foto sin `.align.json` declara QUÉ ejercita.
+
+El segundo eje es geométrico y no se ve al mirar las fotos. Una foto trae
+orientación EXIF, y las orientaciones 5–8 **intercambian los ejes**: la imagen
+cruda mide `(alto, ancho)` respecto de la orientada. Medido al portar
+`load_oriented_photo` a Kotlin, la tabla de desorientación estaba mal en esos
+tres casos, y esta vez reventó con un desbordamiento — pero la variante
+silenciosa lee dentro de rango sobre otra parte de la foto y devuelve una cresta
+plausible, continua y con cobertura del 100%, calculada sobre píxeles que no son
+los que se ven.
+
+Lo único que lo hizo visible es que **dos de las seis fotos traen orientación
+6**. Un fixture elegido por paisaje —nubes, calima, pared, mar— habría salido
+entero de fotos sin girar y el error habría pasado en verde.
+
+Regla: al curar el fixture, comprobar que **la cobertura de orientaciones
+sobrevive**, no solo la de escenas. Y quien lo consuma debe verificar el tamaño
+ORIENTADO antes de comparar ninguna cresta: si una foto girada entra sin girar,
+todo lo demás mide sobre otra imagen.
+
 ---
 
 # TRABAJO
