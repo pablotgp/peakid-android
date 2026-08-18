@@ -1,5 +1,6 @@
 pluginManagement {
     repositories {
+        google()
         gradlePluginPortal()
         mavenCentral()
     }
@@ -7,6 +8,7 @@ pluginManagement {
 
 dependencyResolutionManagement {
     repositories {
+        google()
         mavenCentral()
     }
 }
@@ -14,7 +16,7 @@ dependencyResolutionManagement {
 rootProject.name = "peakid-android"
 
 // :engine es Kotlin Multiplatform desde el día uno (ver el plan, Decisión 3).
-// Hoy solo declara el target jvm porque en esta máquina no hay ni SDK de
-// Android ni macOS; añadir androidTarget() e iosArm64() es una línea cada uno y
-// no mueve ni un fichero, que es justamente el motivo de empezar así.
+// Ya declara jvm y androidTarget; iosArm64 se añade cuando haya un macOS, y
+// será otra línea sin mover un solo fichero, que era el motivo de empezar así.
 include(":engine")
+include(":app")
