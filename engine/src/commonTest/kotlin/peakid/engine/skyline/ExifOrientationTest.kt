@@ -3,6 +3,7 @@ package peakid.engine.skyline
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -28,7 +29,7 @@ class ExifOrientationTest {
 
     @Test
     fun cadaOrientacionEsUnaBiyeccionSobreElRectanguloCrudo() {
-        for (orientacion in 1..8) {
+        for (orientacion in 0..8) {
             val gira = exifSwapsAxes(orientacion)
             val crudoW = if (gira) h else w
             val crudoH = if (gira) w else h
@@ -80,10 +81,33 @@ class ExifOrientationTest {
     }
 
     @Test
+    fun elCeroEsSinEspecificarYVaComoIdentidad() {
+        // El 0 no es un valor válido de EXIF -el rango es 1..8- y aparece en
+        // fotos reales queriendo decir "sin especificar". Medido con la foto de
+        // Nerja en el móvil: `ExifInterface` devolvió 0 porque el tag EXISTE con
+        // ese valor, así que el defecto de la llamada no se aplicó, y el
+        // detector se cayó con IllegalArgumentException.
+        //
+        // PIL lo trata como identidad: `exif_transpose` solo transforma con
+        // 2..8. Aquí igual, o esta foto daría una cresta en Python y ninguna en
+        // Kotlin.
+        assertFalse(exifSwapsAxes(0))
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                assertEquals(exifRawX(x, y, 1, w, h), exifRawX(x, y, 0, w, h))
+                assertEquals(exifRawY(x, y, 1, w, h), exifRawY(x, y, 0, w, h))
+            }
+        }
+    }
+
+    @Test
     fun unaOrientacionDesconocidaLanzaEnVezDePasarDeLargo() {
         // Pasar de largo daría una foto girada procesada sin girar: plausible
         // y equivocada, que es el fallo callado que este proyecto persigue.
+        // Aquí este puerto se aparta de PIL a propósito: PIL ignora en
+        // silencio los valores que no conoce, y un valor corrupto significa que
+        // no sabemos la geometría de la foto.
         assertFailsWith<IllegalArgumentException> { exifRawX(0, 0, 9, w, h) }
-        assertFailsWith<IllegalArgumentException> { exifRawY(0, 0, 0, w, h) }
+        assertFailsWith<IllegalArgumentException> { exifRawY(0, 0, -1, w, h) }
     }
 }

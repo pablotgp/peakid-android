@@ -23,11 +23,33 @@ import java.nio.FloatBuffer
  * Es la parte del puerto donde un error no se ve, así que el fixture no es un
  * test más: es el único guardián que tiene.
  */
-class SegformerSky(modelBytes: ByteArray) : SkyProbability, AutoCloseable {
+class SegformerSky(
+    modelBytes: ByteArray,
+    /**
+     * Hilos de cómputo. `null` deja el defecto de ORT, que es un hilo por
+     * núcleo — razonable en escritorio y demasiado en un móvil, donde cada hilo
+     * añade sus propios búferes intermedios.
+     */
+    intraOpThreads: Int? = null,
+    /**
+     * Arena de memoria de la CPU. Desactivarla renuncia a reutilizar bloques
+     * —algo más lenta— a cambio de un pico MUCHO menor, que es el intercambio
+     * que interesa en un aparato con 3.5 GB compartidos con todo lo demás.
+     *
+     * NO cambia el resultado: es gestión de memoria, no aritmética. El fixture
+     * de la cresta se comprueba igual con arena y sin ella.
+     */
+    arenaDeCpu: Boolean = true,
+) : SkyProbability, AutoCloseable {
 
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
-    private val session: OrtSession =
-        env.createSession(modelBytes, OrtSession.SessionOptions())
+    private val session: OrtSession = env.createSession(
+        modelBytes,
+        OrtSession.SessionOptions().apply {
+            intraOpThreads?.let { setIntraOpNumThreads(it) }
+            if (!arenaDeCpu) setCPUArenaAllocator(false)
+        },
+    )
     private val inputName: String = session.inputNames.first()
 
     override fun compute(
@@ -59,17 +81,30 @@ class SegformerSky(modelBytes: ByteArray) : SkyProbability, AutoCloseable {
 
         val forma = longArrayOf(1, 3, targetH.toLong(), targetW.toLong())
         val salida: DoubleArray
+        val gridH: Int
+        val gridW: Int
         OnnxTensor.createTensor(env, entrada, forma).use { tensor ->
             session.run(mapOf(inputName to tensor)).use { resultado ->
-                @Suppress("UNCHECKED_CAST")
-                val logits = resultado.get(0).value as Array<Array<Array<FloatArray>>>
-                salida = softmaxDeLaClaseCielo(logits[0])
+                val logits = resultado.get(0) as OnnxTensor
+                // Se lee el BÚFER, no `.value`. `.value` materializa el tensor
+                // entero como arrays anidados de Java —150 clases x 384 x 288
+                // son 16.6 millones de floats repartidos en 57 600 objetos
+                // FloatArray, unos 100 MB entre datos y cabeceras— y solo hace
+                // falta UNA clase. En escritorio no se nota; medido en un
+                // Galaxy A17 con 3.5 GB, el sistema mató la app con 2.1 GB en
+                // swap y thrashing al 336%.
+                val forma2 = logits.info.shape          // [1, clases, alto, ancho]
+                val clases = forma2[1].toInt()
+                gridH = forma2[2].toInt()
+                gridW = forma2[3].toInt()
+                salida = softmaxDeLaClaseCielo(logits.floatBuffer, clases, gridH, gridW)
             }
         }
 
-        // de la rejilla del modelo (1/4 de la entrada) al tamaño de trabajo
-        val gridH = targetH / 4
-        val gridW = targetW / 4
+        // de la rejilla del modelo (1/4 de la entrada) al tamaño de trabajo.
+        // Las dimensiones salen del TENSOR, no de dividir entre cuatro: el 1/4
+        // es lo que hace SegFormer hoy, y suponerlo aquí convertiría un cambio
+        // de modelo en una lectura desplazada en vez de en un error.
         return resampleMascara(salida, gridW, gridH, width, height)
     }
 
@@ -80,23 +115,26 @@ class SegformerSky(modelBytes: ByteArray) : SkyProbability, AutoCloseable {
      * desborda a infinito y la probabilidad sale NaN, que luego viaja hasta la
      * cresta sin que nada avise.
      */
-    private fun softmaxDeLaClaseCielo(logits: Array<Array<FloatArray>>): DoubleArray {
-        val clases = logits.size
-        val alto = logits[0].size
-        val ancho = logits[0][0].size
+    private fun softmaxDeLaClaseCielo(
+        logits: java.nio.FloatBuffer,
+        clases: Int,
+        alto: Int,
+        ancho: Int,
+    ): DoubleArray {
         val out = DoubleArray(alto * ancho)
-        for (r in 0 until alto) {
-            for (c in 0 until ancho) {
-                var maximo = Float.NEGATIVE_INFINITY
-                for (k in 0 until clases) {
-                    val v = logits[k][r][c]
-                    if (v > maximo) maximo = v
-                }
-                var suma = 0.0
-                for (k in 0 until clases) suma += kotlin.math.exp((logits[k][r][c] - maximo).toDouble())
-                val cielo = kotlin.math.exp((logits[SKY_CLASS][r][c] - maximo).toDouble())
-                out[r * ancho + c] = cielo / suma
+        val plano = alto * ancho
+        for (i in 0 until plano) {
+            var maximo = Float.NEGATIVE_INFINITY
+            for (k in 0 until clases) {
+                val v = logits.get(k * plano + i)
+                if (v > maximo) maximo = v
             }
+            var suma = 0.0
+            for (k in 0 until clases) {
+                suma += kotlin.math.exp((logits.get(k * plano + i) - maximo).toDouble())
+            }
+            val cielo = kotlin.math.exp((logits.get(SKY_CLASS * plano + i) - maximo).toDouble())
+            out[i] = cielo / suma
         }
         return out
     }

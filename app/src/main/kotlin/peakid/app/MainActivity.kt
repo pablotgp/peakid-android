@@ -75,6 +75,9 @@ private fun AlignScreen(compass: Compass) {
     val repo = remember { PackRepository(context) }
     val cache = remember { PanoramaCache() }
     var markMode by remember { mutableStateOf(false) }
+    var showCrest by remember { mutableStateOf(true) }
+    var latTexto by remember { mutableStateOf("") }
+    var lonTexto by remember { mutableStateOf("") }
     var cameraUri by remember { mutableStateOf<Uri?>(null) }
     val detector = remember { DetectorDeCresta(context) }
     // el URI de la foto cargada: el detector vuelve a leerla a resolución
@@ -124,7 +127,10 @@ private fun AlignScreen(compass: Compass) {
             s.hfovDeg?.let { state.hfovDeg = it }
 
             // Estado limpio para la foto nueva: sin esto, la semilla de la foto
-            // anterior sigue puesta y la siembra tardía nunca se activa.
+            // anterior sigue puesta y la siembra tardía nunca se activa. Y la
+            // cresta, la inclinación y la PROCEDENCIA de la foto anterior se
+            // quedaban pegadas a la nueva.
+            state.reiniciarParaFotoNueva()
             state.azimuthTouched = false
             state.seedAzimuth = SeedEntry(0.0, "default")
             state.azimuthDeg = 0.0
@@ -152,12 +158,23 @@ private fun AlignScreen(compass: Compass) {
                     sembrarAzimut(state, state.compassAzimuthDeg!!, "compass")
             }
 
+            // los campos se siembran con la posicion en uso: corregir un
+            // numero es mucho mas facil que escribirlo entero, y ademas hace
+            // VISIBLE de donde ha salido
+            latTexto = "%.6f".format(state.latDeg)
+            lonTexto = "%.6f".format(state.lonDeg)
+
             if (s.gpsInvalid) {
                 state.status = "La foto trae bloque GPS pero no es utilizable. " +
                     "Introduce la posición a mano."
             }
-            state.panorama = null
-            cache.invalidate()
+            // NO se invalida la cache. El panorama depende de la POSICION, no
+            // de la foto, y su clave ya esta cuantizada por posicion: si el
+            // usuario carga otra foto del mismo sitio, la respuesta correcta es
+            // la que ya esta calculada. Invalidar aqui forzaba un barrido de
+            // ~20 s para reproducir exactamente el mismo panorama, y ademas
+            // hacia parecer que "no se actualizaba" cuando lo que pasaba es que
+            // no tenia por que cambiar.
             recalcular(state, repo, cache, scope)
         }
     }
@@ -264,6 +281,57 @@ private fun AlignScreen(compass: Compass) {
             )
         }
 
+        // 0) LA POSICION, que es de donde sale todo lo demas.
+        //
+        // El panorama depende de la POSICION, no de la foto: dos fotos del
+        // mismo sitio dan el mismo panorama, y eso es correcto. Lo que faltaba
+        // era poder DECIR el sitio. Una foto de galeria sin GPS utilizable caia
+        // en la posicion actual del movil, sin alternativa, mientras el propio
+        // aviso decia "introduce la posicion a mano". Pedir algo que la
+        // interfaz no ofrece es peor que no decir nada.
+        Text("0 · Posición del observador", fontSize = 12.sp, color = Color(0xFFFFC400))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = latTexto, onValueChange = { latTexto = it },
+                label = { Text("lat") }, singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedTextField(
+                value = lonTexto, onValueChange = { lonTexto = it },
+                label = { Text("lon") }, singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            Button(onClick = {
+                val la = latTexto.trim().replace(',', '.').toDoubleOrNull()
+                val lo = lonTexto.trim().replace(',', '.').toDoubleOrNull()
+                if (la == null || lo == null ||
+                    abs(la) > 90.0 || abs(lo) > 180.0
+                ) {
+                    // ni se aproxima ni se ignora: se dice
+                    state.status = "Coordenadas no válidas: lat en [-90,90], " +
+                        "lon en [-180,180], en grados decimales."
+                } else {
+                    state.latDeg = la
+                    state.lonDeg = lo
+                    state.positionSource = PositionSource.MANUAL
+                    recalcular(state, repo, cache, scope)
+                }
+            }) { Text("Usar") }
+        }
+        Text(
+            "posición ${"%.6f".format(state.latDeg)}, ${"%.6f".format(state.lonDeg)}" +
+                " · fuente ${state.positionSource.json}" +
+                if (state.positionSource != PositionSource.EXIF) {
+                    "  ← la foto no dice dónde se tomó"
+                } else {
+                    ""
+                },
+            fontSize = 11.sp, color = Color(0xFF8FA3B5), fontFamily = FontFamily.Monospace,
+        )
+
         // 1) acotar el sector, PRIMERO
         Text("1 · Arrastra para acotar el sector", fontSize = 12.sp, color = Color(0xFFFFC400))
         SectorStrip(state, Modifier.fillMaxWidth().height(90.dp))
@@ -281,9 +349,13 @@ private fun AlignScreen(compass: Compass) {
                     state.photo!!.widthPx.toFloat() / state.photo!!.heightPx,
                 ).background(Color.Black),
                 onMarkCrest = { c, r ->
+                    // marcar a dedo sobre una cresta detectada la convierte en
+                    // mezcla; se declara como marcada, que es lo conservador
+                    state.crestDetected = false
                     state.crestCols.add(c); state.crestRows.add(r); state.crestVersion++
                 },
                 markMode = markMode,
+                showCrest = showCrest,
             )
         }
 
@@ -312,6 +384,128 @@ private fun AlignScreen(compass: Compass) {
         )
         Text("campo ${fmt(state.hfovDeg)}°", fontSize = 11.sp, color = Color(0xFF8FA3B5),
             fontFamily = FontFamily.Monospace)
+
+        // 2b) LA BÚSQUEDA, que necesita una cresta
+        Text("2b · Alineamiento automático", fontSize = 12.sp, color = Color(0xFFFFC400))
+        val pista = pistaParaBuscar(state, compass)
+        Text(
+            "acotado por ${pista.fuente}" +
+                if (pista.acotada) {
+                    " · ±${"%.0f".format(pista.margenDeg)}° alrededor de " +
+                        "${fmt(pista.centroDeg)}°"
+                } else {
+                    ""
+                },
+            fontSize = 11.sp,
+            color = if (pista.acotada) Color(0xFF8FA3B5) else Color(0xFFFFA000),
+            fontFamily = FontFamily.Monospace,
+        )
+        Button(
+            enabled = state.panorama != null && state.crestCols.size >= 20,
+            onClick = {
+                scope.launch {
+                    state.status = "Buscando el alineamiento…"
+                    val r = runCatching {
+                        withContext(Dispatchers.Default) { buscarAlineamiento(state, pista) }
+                    }
+                    r.onSuccess { res ->
+                        state.searchResult = res
+                        val mejor = res.candidates.firstOrNull()
+                        if (mejor == null) {
+                            state.status = "La búsqueda no ha encontrado ningún " +
+                                "candidato. Queda el ajuste a mano."
+                        } else {
+                            state.aplicar(mejor.params)
+                            state.searchUsed = true
+                            // el punto de partida se congela AQUÍ: lo que el
+                            // usuario mueva a partir de ahora es su revisión
+                            state.marcarPuntoDePartidaAutomatico()
+                            state.status = "Alineamiento propuesto: " +
+                                "azimut ${fmt(mejor.params.azimuthDeg)}° · " +
+                                "campo ${fmt(mejor.params.hfovDeg)}° · " +
+                                "inclinación ${fmt(mejor.params.pitchDeg)}° · " +
+                                "giro ${fmt(mejor.params.rollDeg)}° · " +
+                                "error ${"%.1f".format(mejor.errorPx)} px " +
+                                "(${"%.2f".format(mejor.errorDeg)}°) · " +
+                                "cobertura ${"%.0f".format(100 * mejor.coverage)}%"
+                        }
+                        android.util.Log.i(TAG, "busqueda: ${state.status}")
+                    }.onFailure {
+                        state.status = "La búsqueda ha fallado: ${it.message}. " +
+                            "Queda el ajuste a mano."
+                        android.util.Log.w(TAG, "busqueda FALLA", it)
+                    }
+                }
+            },
+        ) { Text("Buscar alineamiento") }
+        if (state.crestCols.size < 20) {
+            Text(
+                "Hace falta una cresta primero: pulsa «Detectar», o márcala a dedo.",
+                fontSize = 11.sp, color = Color(0xFF6F8496),
+            )
+        }
+
+        // LAS RESERVAS, en pantalla y no en la consola. Si el resultado tiene
+        // pegas, el usuario tiene que verlas: presentarlo sin ellas sería
+        // inventarse una certeza, que es lo único que este proyecto no hace.
+        state.searchResult?.let { res ->
+            val reservas = reservasDe(res, pista)
+            if (reservas.isEmpty()) {
+                Text(
+                    "Sin reservas detectables. NO es garantía de acierto: " +
+                        "comprueba que los topónimos caen sobre los bultos que " +
+                        "les tocan.",
+                    fontSize = 11.sp, color = Color(0xFF8FD48F),
+                )
+            } else {
+                Column(
+                    Modifier.fillMaxWidth()
+                        .background(Color(0x33FF5252))
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        "NO se puede dar por bueno:",
+                        fontSize = 12.sp, color = Color(0xFFFF8A80),
+                    )
+                    for (r in reservas) {
+                        Text("· $r", fontSize = 11.sp, color = Color(0xFFFFCDD2))
+                    }
+                }
+            }
+
+            // Los candidatos alternativos, accesibles. Entre dos hipótesis no
+            // decide el error en píxeles sino QUÉ CIMA CAE SOBRE QUÉ BULTO, y
+            // eso solo puede mirarlo una persona: para mirarlo hace falta poder
+            // ponerse en la otra hipótesis.
+            if (res.candidates.size > 1) {
+                Text(
+                    "Otras hipótesis — aplícalas y compara los topónimos:",
+                    fontSize = 11.sp, color = Color(0xFFB8C6D4),
+                )
+                for ((i, cand) in res.candidates.withIndex()) {
+                    OutlinedButton(
+                        onClick = {
+                            state.aplicar(cand.params)
+                            state.searchUsed = true
+                            state.marcarPuntoDePartidaAutomatico()
+                            state.status = "Aplicada la hipótesis ${i + 1}: " +
+                                "azimut ${fmt(cand.params.azimuthDeg)}° · " +
+                                "campo ${fmt(cand.params.hfovDeg)}°"
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            "${i + 1}) az ${fmt(cand.params.azimuthDeg)}° · " +
+                                "campo ${fmt(cand.params.hfovDeg)}° · " +
+                                "error ${"%.1f".format(cand.errorPx)} px" +
+                                if (cand.saturated) " · SATURADO" else "",
+                            fontSize = 11.sp,
+                        )
+                    }
+                }
+            }
+        }
 
         // 3) inclinación y giro: cerrados o a mano
         Text("3 · Inclinación y giro", fontSize = 12.sp, color = Color(0xFFFFC400))
@@ -347,14 +541,13 @@ private fun AlignScreen(compass: Compass) {
                                 usadas++
                             }
                             state.crestVersion++
+                            state.crestDetected = true
                             state.detectorUsado = "modelo+dp"
                             val cobertura = 100.0 * usadas / m.crest.valid.size
                             state.status =
                                 "Cresta detectada: $usadas columnas fiables de " +
                                     "${m.crest.valid.size} (${"%.0f".format(cobertura)}%) · " +
-                                    "modelo ${m.cargaModeloMs} ms · píxeles ${m.pixelesMs} ms · " +
-                                    "inferencia+DP ${m.inferenciaYCaminoMs} ms · " +
-                                    "total ${m.totalMs} ms"
+                                    m.resumen()
                             android.util.Log.i(TAG, "deteccion: ${state.status}")
                         }.onFailure {
                             state.status = "El detector ha fallado: ${it.message}. " +
@@ -366,8 +559,20 @@ private fun AlignScreen(compass: Compass) {
             ) { Text("Detectar") }
             Button(onClick = { state.status = state.solveAssist() }) { Text("Resolver") }
             OutlinedButton(onClick = {
-                state.crestCols.clear(); state.crestRows.clear(); state.crestVersion++
+                state.crestCols.clear(); state.crestRows.clear()
+                state.crestDetected = false
+                state.detectorUsado = null
+                state.crestVersion++
             }) { Text("Borrar") }
+        }
+        // Poder APAGAR la cresta es parte de poder juzgarla: encima de la
+        // silueta tapa justo lo que hay que mirar.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = showCrest, onCheckedChange = { showCrest = it })
+            Text(
+                if (state.crestDetected) "Ver la cresta detectada" else "Ver la cresta marcada",
+                fontSize = 12.sp, color = Color(0xFFB8C6D4),
+            )
         }
         Text(
             "Con la cresta marcada, inclinación y giro se resuelven en forma cerrada: " +

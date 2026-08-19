@@ -37,6 +37,9 @@ class Crest(
 /** Margen mínimo para dar por fiable una columna. */
 const val MIN_MARGIN: Double = 0.02
 
+/** Reloj de pared en milisegundos, sin depender de la plataforma. */
+internal expect fun ahoraMs(): Long
+
 /**
  * Detecta la cresta sobre una imagen de trabajo YA DECIMADA.
  *
@@ -58,8 +61,17 @@ fun detectSkyline(
     sky: SkyProbability,
     longSide: Int = INPUT_LONG_SIDE,
     jumpLimitOverride: Int? = null,
+    /**
+     * Reloj por etapa, opcional. Existe porque medir "inferencia + DP" en un
+     * solo número no permite decidir nada: las dos tienen palancas distintas
+     * —la resolución del modelo por un lado, el bucle del camino por otro— y
+     * agrupadas cualquier optimización sería a ciegas.
+     */
+    reloj: ((etapa: String, ms: Long) -> Unit)? = null,
 ): Crest {
+    val t0 = ahoraMs()
     val s = sky.compute(work, workWidth, workHeight, longSide)
+    reloj?.invoke("inferencia", ahoraMs() - t0)
 
     // frontera CRUDA del modelo: primera fila que deja de ser cielo
     val raw = DoubleArray(workWidth)
@@ -79,6 +91,7 @@ fun detectSkyline(
         raw[c] = (if (primeraNoCielo < 0) 0 else primeraNoCielo).toDouble()
     }
 
+    val tCoste = ahoraMs()
     // cuanto de la máscara EN FILAS DE TRABAJO, y de ahí la banda
     val quantum = maskQuantumRows(workWidth, workHeight, longSide)
     val band = bandWidth(quantum)
@@ -99,8 +112,12 @@ fun detectSkyline(
     for (c in 0 until workWidth) if (found[c] && hasSky[c]) usable.add(c)
     applyBand(cost, workWidth, workHeight, raw, usable.toIntArray(), band)
 
+    reloj?.invoke("coste", ahoraMs() - tCoste)
+
+    val tCamino = ahoraMs()
     val limite = jumpLimitOverride ?: pathJumpLimit(band)
     val path = bestPath(cost, workWidth, workHeight, jumpLimit = limite)
+    reloj?.invoke("camino", ahoraMs() - tCamino)
 
     val rows = DoubleArray(workWidth) { path.rows[it].toDouble() }
     var valid = BooleanArray(workWidth) { path.margin[it] >= MIN_MARGIN && hasSky[it] }

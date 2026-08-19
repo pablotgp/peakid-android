@@ -35,6 +35,8 @@ fun PhotoOverlay(
     modifier: Modifier = Modifier,
     onMarkCrest: (Double, Double) -> Unit,
     markMode: Boolean,
+    /** Poder APAGAR la cresta es parte de juzgarla: tapa lo que hay debajo. */
+    showCrest: Boolean = true,
 ) {
     val foto = state.photo ?: return
     val pano = state.panorama
@@ -59,7 +61,7 @@ fun PhotoOverlay(
         )
         drawSkyline(pano, params, foto.widthPx, foto.heightPx, escala, version)
         drawPeaks(pano, params, foto.widthPx, foto.heightPx, escala)
-        drawCrest(state, escala)
+        if (showCrest) drawCrest(state, escala)
     }
 }
 
@@ -151,15 +153,41 @@ private fun DrawScope.drawPeaks(
     }
 }
 
+/**
+ * La cresta MARCADA y la DETECTADA no se pintan igual, porque no son lo mismo.
+ *
+ * A dedo son dos docenas de decisiones deliberadas y conviene ver cada una: van
+ * como puntos. El detector devuelve una columna de cada `step` —en una foto de
+ * 3060 de ancho son 1020 puntos—, y pintarlos como círculos de radio 6 da una
+ * banda de 12 px que tapa justo la cresta que hay que juzgar. Van como línea
+ * fina.
+ */
 private fun DrawScope.drawCrest(state: AlignState, escala: Float) {
-    for (i in state.crestCols.indices) {
-        drawCircle(
-            Color(0xFF00E5FF), radius = 6f,
-            center = Offset(
+    if (state.crestCols.isEmpty()) return
+
+    if (state.crestDetected) {
+        var previo: Offset? = null
+        for (i in state.crestCols.indices) {
+            val punto = Offset(
                 (state.crestCols[i] * escala).toFloat(),
                 (state.crestRows[i] * escala).toFloat(),
-            ),
-        )
+            )
+            // el detector deja huecos donde el camino no es fiable, y esos
+            // huecos son información: la línea se corta, no se interpola
+            val salto = previo?.let { kotlin.math.abs(punto.x - it.x) > 4f * escala } ?: true
+            if (!salto) drawLine(Color(0xFF00E5FF), previo!!, punto, strokeWidth = 2f)
+            previo = punto
+        }
+    } else {
+        for (i in state.crestCols.indices) {
+            drawCircle(
+                Color(0xFF00E5FF), radius = 6f,
+                center = Offset(
+                    (state.crestCols[i] * escala).toFloat(),
+                    (state.crestRows[i] * escala).toFloat(),
+                ),
+            )
+        }
     }
 }
 

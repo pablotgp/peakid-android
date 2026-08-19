@@ -72,10 +72,19 @@ class AlignState {
     /** Hay posición utilizable. (0,0) es el valor sin poner, no el golfo de Guinea. */
     fun hasPosition(): Boolean = !(latDeg == 0.0 && lonDeg == 0.0)
 
-    /** Cresta marcada a dedo sobre la foto, en píxeles de la imagen COMPLETA. */
+    /** Cresta sobre la foto, en píxeles de la imagen COMPLETA. */
     val crestCols = mutableListOf<Double>()
     val crestRows = mutableListOf<Double>()
     var crestVersion by mutableStateOf(0)
+
+    /**
+     * ¿La cresta viene del detector o la marcó una persona?
+     *
+     * Cambia cómo se dibuja —línea fina frente a puntos—, porque son cosas
+     * distintas: dos docenas de decisiones deliberadas frente a mil columnas
+     * automáticas. Y cambia la procedencia del `.align.json`.
+     */
+    var crestDetected by mutableStateOf(false)
 
     var compassAzimuthDeg by mutableStateOf<Double?>(null)
     var declinationDeg by mutableStateOf(0.0)
@@ -90,7 +99,25 @@ class AlignState {
      */
     var detectorUsado by mutableStateOf<String?>(null)
     var usedAutoPitchRoll by mutableStateOf(false)
+
+    /** ¿Intervino la búsqueda automática en estos parámetros? */
+    var searchUsed by mutableStateOf(false)
+
+    /**
+     * El último resultado de la búsqueda, CON sus reservas.
+     *
+     * Se guarda entero, y no solo el mejor candidato, porque las reservas y los
+     * candidatos alternativos son parte del resultado: presentar el óptimo a
+     * secas convertiría "el mejor de estos" en "este es", que es justo lo que el
+     * proyecto no hace.
+     */
+    var searchResult by mutableStateOf<peakid.engine.align.SearchResult?>(null)
     private var paramsAfterAssist: AlignmentParams? = null
+
+    /** Congela los parámetros que dejó una ayuda automática, para el delta. */
+    fun marcarPuntoDePartidaAutomatico() {
+        paramsAfterAssist = params()
+    }
     var reviewKind by mutableStateOf(ReviewKind.NONE)
     var reviewNote by mutableStateOf("")
     var notes by mutableStateOf("")
@@ -99,6 +126,40 @@ class AlignState {
     // semillas, con su origen
     var seedAzimuth by mutableStateOf(SeedEntry(0.0, "default"))
     var seedHfov by mutableStateOf(SeedEntry(65.0, "default"))
+
+    /**
+     * Olvida TODO lo que pertenece a la foto anterior.
+     *
+     * Sin esto, cargar otra foto conservaba la cresta de la anterior dibujada
+     * encima —que es lo que se ve— y, peor, la PROCEDENCIA: el `.align.json`
+     * de la foto B declaraba `detector = "modelo+dp"` y `auto_pitch_roll` por
+     * un trabajo hecho sobre la foto A. Eso no es un fallo visual: es una
+     * referencia que afirma algo falso sobre su propio origen, y el arnés la
+     * creeria.
+     *
+     * Lo que NO se toca aqui: la posicion y el panorama. Dependen del sitio,
+     * no de la foto, y `cargar` los vuelve a decidir con las semillas de la
+     * foto nueva.
+     */
+    fun reiniciarParaFotoNueva() {
+        crestCols.clear()
+        crestRows.clear()
+        crestDetected = false
+        crestVersion++
+
+        pitchDeg = 0.0
+        rollDeg = 0.0
+
+        detectorUsado = null
+        usedAutoPitchRoll = false
+        searchUsed = false
+        searchResult = null
+        paramsAfterAssist = null
+        reviewKind = ReviewKind.NONE
+        reviewNote = ""
+        notes = ""
+        lowConfidence = false
+    }
 
     fun params() = AlignmentParams(azimuthDeg, hfovDeg, pitchDeg, rollDeg)
 
@@ -122,8 +183,17 @@ class AlignState {
         return delta
     }
 
+    /**
+     * ¿Ha revisado un humano lo que produjo la ayuda automática?
+     *
+     * Vale para las DOS ayudas —la búsqueda y el ajuste cerrado de inclinación
+     * y giro—, no solo para la segunda. Mirarla solo a ella dejaba fuera el
+     * caso más frecuente de la fase 7: buscar, corregir el azimut a ojo y
+     * exportar. Eso es una revisión humana y tiene que constar como tal.
+     */
     fun manualReview(): Boolean =
-        usedAutoPitchRoll && (reviewDelta().isNotEmpty() || reviewKind != ReviewKind.NONE)
+        (usedAutoPitchRoll || searchUsed) &&
+            (reviewDelta().isNotEmpty() || reviewKind != ReviewKind.NONE)
 
     /**
      * Resuelve inclinación y giro en forma cerrada a partir de la cresta
@@ -174,8 +244,7 @@ class AlignState {
             alignment = params().toValues(),
             image = ImageInfo(foto.widthPx, foto.heightPx),
             provenance = Provenance.of(
-                // la búsqueda automática es la fase 7: aquí NUNCA es true
-                searchUsed = false,
+                searchUsed = searchUsed,
                 autoPitchRoll = usedAutoPitchRoll,
                 detector = detectorUsado,
                 manualReview = manualReview(),

@@ -18,9 +18,15 @@ class DeteccionMedida(
     val crest: Crest,
     val cargaModeloMs: Long,
     val pixelesMs: Long,
-    val inferenciaYCaminoMs: Long,
+    /** Etapas de dentro del motor: inferencia, coste, camino. */
+    val etapas: Map<String, Long>,
 ) {
-    val totalMs: Long get() = cargaModeloMs + pixelesMs + inferenciaYCaminoMs
+    val totalMs: Long get() = cargaModeloMs + pixelesMs + etapas.values.sum()
+
+    fun resumen(): String =
+        "modelo $cargaModeloMs ms · píxeles $pixelesMs ms · " +
+            etapas.entries.joinToString(" · ") { "${it.key} ${it.value} ms" } +
+            " · total $totalMs ms"
 }
 
 /**
@@ -44,7 +50,11 @@ class DetectorDeCresta(private val context: Context) {
      */
     private fun modelo(): SegformerSky = modelo ?: run {
         val bytes = context.assets.open(NOMBRE_MODELO).use { it.readBytes() }
-        SegformerSky(bytes).also { modelo = it }
+        // Dos hilos y sin arena: medido, con los defectos de ORT el sistema
+        // mató la app con 2.1 GB en swap. En escritorio los defectos están
+        // bien; aquí la memoria es el recurso escaso, no la CPU.
+        SegformerSky(bytes, intraOpThreads = 2, arenaDeCpu = false)
+            .also { modelo = it }
     }
 
     fun cerrar() {
@@ -60,12 +70,13 @@ class DetectorDeCresta(private val context: Context) {
         val trabajo = imagenDeTrabajo(uri, foto)
         val t2 = System.currentTimeMillis()
 
+        val etapas = LinkedHashMap<String, Long>()
         val crest = detectSkyline(
             trabajo.rgb, trabajo.width, trabajo.height, trabajo.step, sesion,
+            reloj = { etapa, ms -> etapas[etapa] = ms },
         )
-        val t3 = System.currentTimeMillis()
 
-        return DeteccionMedida(crest, t1 - t0, t2 - t1, t3 - t2)
+        return DeteccionMedida(crest, t1 - t0, t2 - t1, etapas)
     }
 
     /**
@@ -88,17 +99,21 @@ class DetectorDeCresta(private val context: Context) {
                 ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL,
             )
         }
-        val opts = BitmapFactory.Options().apply {
-            inPreferredConfig = Bitmap.Config.ARGB_8888   // RGB_565 perdería precisión
-        }
-        val bruta = context.contentResolver.openInputStream(uri).use {
-            BitmapFactory.decodeStream(it, null, opts)
-        } ?: error("no se pudo decodificar la foto a resolución completa")
-
+        // POR BANDAS, no la foto entera. Medido en el Galaxy A17: decodificar
+        // 3060x4080 en ARGB_8888 son 50 MB de una tacada, y con 48 MB libres y
+        // 1.7 GB de swap en uso el sistema mató el proceso —lmkd, señal 9,
+        // `reason: device is not responding`, con oom_score_adj 0, o sea en
+        // primer plano—. No fue un OutOfMemoryError de Java: no hubo excepción
+        // que capturar, la app simplemente desapareció.
+        //
+        // Una banda de BANDA_FILAS filas crudas son ~4 MB, y como las
+        // coordenadas crudas que hacen falta recorren la imagen en orden, cada
+        // banda se decodifica UNA vez y no se vuelve a ella.
+        val bandas = BandasDeLaFoto(context, uri)
         try {
             val gira = exifSwapsAxes(orientacion)
-            val anchoOrientado = if (gira) bruta.height else bruta.width
-            val altoOrientado = if (gira) bruta.width else bruta.height
+            val anchoOrientado = if (gira) bandas.alto else bandas.ancho
+            val altoOrientado = if (gira) bandas.ancho else bandas.alto
             // coherencia con el único origen de píxeles de la app
             check(anchoOrientado == foto.widthPx && altoOrientado == foto.heightPx) {
                 "el tamaño orientado ${anchoOrientado}x$altoOrientado no cuadra con " +
@@ -110,28 +125,21 @@ class DetectorDeCresta(private val context: Context) {
             val h = (altoOrientado + step - 1) / step
             val rgb = DoubleArray(h * w * 3)
 
-            // Se leen filas ENTERAS del bitmap crudo, no píxel a píxel:
-            // `getPixel` serían ~1.4 millones de llamadas JNI. Pero para que
-            // una fila cargada sirva para varios píxeles hay que recorrer en el
-            // orden que deja FIJA la fila CRUDA, y ese orden depende de la
-            // orientación:
+            // El orden de recorrido no es indiferente: hay que avanzar por el
+            // eje que hace crecer la FILA CRUDA de forma monótona, para que
+            // cada banda se decodifique una vez y no haya que volver a ella.
+            // Y ese eje depende de la orientación:
             //
             //  - sin giro de ejes, la fila cruda la fija la fila de trabajo
             //  - CON giro, la fija la COLUMNA de trabajo
             //
             // Recorrer siempre igual no da un resultado incorrecto: da una
-            // recarga por píxel, que es peor que no cachear. Es el tipo de
-            // detalle que solo se ve midiendo.
-            val fila = IntArray(bruta.width)
-            var filaCargada = -1
+            // redecodificación por píxel. Es el tipo de detalle que solo se ve
+            // midiendo.
             fun leer(r: Int, c: Int) {
                 val xs = exifRawX(c * step, r * step, orientacion, anchoOrientado, altoOrientado)
                 val ys = exifRawY(c * step, r * step, orientacion, anchoOrientado, altoOrientado)
-                if (ys != filaCargada) {
-                    bruta.getPixels(fila, 0, bruta.width, 0, ys, bruta.width, 1)
-                    filaCargada = ys
-                }
-                val pixel = fila[xs]
+                val pixel = bandas.pixel(xs, ys)
                 val i = (r * w + c) * 3
                 rgb[i] = ((pixel shr 16) and 0xFF).toDouble()
                 rgb[i + 1] = ((pixel shr 8) and 0xFF).toDouble()
@@ -144,7 +152,7 @@ class DetectorDeCresta(private val context: Context) {
             }
             return Trabajo(rgb, w, h, step)
         } finally {
-            bruta.recycle()
+            bandas.cerrar()
         }
     }
 
@@ -154,6 +162,74 @@ class DetectorDeCresta(private val context: Context) {
         val height: Int,
         val step: Int,
     )
+
+    /**
+     * Lectura de la foto a resolución COMPLETA por bandas horizontales.
+     *
+     * Existe porque decodificarla entera mató la app: 50 MB de una tacada en un
+     * móvil con 48 MB libres y 1.7 GB de swap en uso. El sistema no lanza una
+     * excepción — manda `SIGKILL` y la app desaparece —, así que no hay nada
+     * que capturar y el arreglo tiene que ser no llegar a pedir esa memoria.
+     *
+     * NO se usa `inSampleSize`, que sería lo cómodo: solo admite potencias de
+     * dos y además promedia, mientras que el motor hace `photo[::step, ::step]`
+     * —un píxel de cada `step`, sin promediar—. Los píxeles tienen que ser
+     * EXACTAMENTE los mismos que valida el fixture de la cresta, así que se
+     * decodifica a resolución nativa y se recorta por regiones.
+     *
+     * La banda se sustituye cuando la fila pedida se sale de ella. Quien llame
+     * debe pedir las filas en orden monótono, o esto se convierte en una
+     * redecodificación por píxel.
+     */
+    private class BandasDeLaFoto(context: Context, uri: Uri) {
+
+        @Suppress("DEPRECATION")   // newInstance(InputStream) pide API 31; minSdk es 26
+        private val decoder: android.graphics.BitmapRegionDecoder =
+            context.contentResolver.openInputStream(uri).use {
+                android.graphics.BitmapRegionDecoder.newInstance(it!!, false)
+            } ?: error("no se pudo abrir la foto por regiones")
+
+        val ancho: Int = decoder.width
+        val alto: Int = decoder.height
+
+        private val opciones = BitmapFactory.Options().apply {
+            inPreferredConfig = Bitmap.Config.ARGB_8888   // RGB_565 perdería precisión
+        }
+        private var banda: Bitmap? = null
+        private var desde = -1
+        private var hasta = -1
+        private var fila = IntArray(0)
+        private var filaCargada = -1
+
+        /** Cuántas filas crudas por banda: ~4 MB con una foto de 4000 de ancho. */
+        private val altoDeBanda = 256
+
+        fun pixel(x: Int, y: Int): Int {
+            if (y < desde || y >= hasta) cargarBandaQueContiene(y)
+            if (y != filaCargada) {
+                banda!!.getPixels(fila, 0, ancho, 0, y - desde, ancho, 1)
+                filaCargada = y
+            }
+            return fila[x]
+        }
+
+        private fun cargarBandaQueContiene(y: Int) {
+            banda?.recycle()
+            desde = (y / altoDeBanda) * altoDeBanda
+            hasta = minOf(desde + altoDeBanda, alto)
+            banda = decoder.decodeRegion(
+                android.graphics.Rect(0, desde, ancho, hasta), opciones,
+            ) ?: error("no se pudo decodificar la banda [$desde,$hasta)")
+            if (fila.size != ancho) fila = IntArray(ancho)
+            filaCargada = -1
+        }
+
+        fun cerrar() {
+            banda?.recycle()
+            banda = null
+            decoder.recycle()
+        }
+    }
 
     companion object {
         const val NOMBRE_MODELO = "segformer_b0_ade.onnx"
