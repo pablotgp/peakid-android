@@ -112,10 +112,32 @@ fun reservasDe(r: SearchResult, pista: PistaDeBusqueda): List<String> {
         out.add("La búsqueda no ha encontrado ningún candidato.")
         return out
     }
-    if (r.ambiguous) {
+    // TODOS LOS CANDIDATOS EMPATADOS es un fallo distinto y reconocible, y
+    // merece decirse con sus palabras. Si la cresta no encaja en ninguna parte
+    // del sector, la busqueda no tiene con que preferir un azimut sobre otro:
+    // salen todos con el MISMO error y el campo huye al borde del rango.
+    // Presentar eso como "ambiguo" es cierto pero inutil: el usuario necesita
+    // saber que no es que dude entre dos sitios, es que no ha encontrado nada.
+    val errores = r.candidates.map { it.errorPx }
+    val empatanTodos = r.candidates.size > 1 &&
+        (errores.max() - errores.min()) < 0.05
+    if (empatanTodos) {
         out.add(
-            "AMBIGUO: hay otra hipótesis lejana casi igual de buena " +
-                "(solo un ${"%.0f".format(100 * r.ambiguityMargin)}% peor). " +
+            "SIN SEÑAL en este sector: los ${r.candidates.size} candidatos dan " +
+                "el MISMO error (${"%.1f".format(errores.first())} px). La cresta " +
+                "no encaja en ninguna parte de lo que has acotado, así que el " +
+                "azimut que sale no significa nada. Mueve el sector a otra zona.",
+        )
+    }
+    if (r.ambiguous && !empatanTodos) {
+        val peor = 100 * r.ambiguityMargin
+        out.add(
+            "AMBIGUO: hay otra hipótesis lejana " +
+                if (peor < 0.5) {
+                    "EXACTAMENTE igual de buena. "
+                } else {
+                    "casi igual de buena (solo un ${"%.0f".format(peor)}% peor). "
+                } +
                 "Compara los topónimos antes de fiarte.",
         )
     }

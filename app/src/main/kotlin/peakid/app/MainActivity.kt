@@ -28,7 +28,11 @@ import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.foundation.layout.PaddingValues
+import peakid.engine.align.Cardinal
 import peakid.engine.align.SeedEntry
+import peakid.engine.align.nearestCardinal
+import peakid.engine.align.sectorForCardinal
 import peakid.engine.geo.normalizeAzimuthDeg
 import peakid.engine.geo.wrapDeltaDeg
 
@@ -154,8 +158,17 @@ private fun AlignScreen(compass: Compass) {
             when {
                 s.azimuthDeg != null ->
                     sembrarAzimut(state, s.azimuthDeg, "exif")
+                // FOTO HECHA CON LA APP: la lectura es del disparo y se exporta
+                // como `compass`. Es evidencia sobre ESTA foto.
+                state.capturaBrujulaDeg != null ->
+                    sembrarAzimut(state, state.capturaBrujulaDeg!!, "compass")
+                // FOTO DE GALERÍA: la brújula dice hacia dónde apunta el móvil
+                // ahora, no dónde miraba la foto. Sirve de punto de partida y se
+                // exporta con OTRO nombre, para que no ensucie las medidas del
+                // error del sensor: mezclarlas daría filas donde la "diferencia
+                // brújula-ajuste" no mide nada.
                 compass.positioned && state.compassAzimuthDeg != null ->
-                    sembrarAzimut(state, state.compassAzimuthDeg!!, "compass")
+                    sembrarAzimut(state, state.compassAzimuthDeg!!, "compass_live")
             }
 
             // los campos se siembran con la posicion en uso: corregir un
@@ -181,7 +194,14 @@ private fun AlignScreen(compass: Compass) {
 
     val galeria = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
-    ) { uri -> uri?.let { cargar(it, nombreDe(context, it)) } }
+    ) { uri ->
+        // una foto de galería no tiene lectura de disparo, y arrastrar la de
+        // una captura anterior sería atribuirle a esta foto un rumbo que no es
+        // suyo
+        state.capturaBrujulaDeg = null
+        state.esperandoBrujulaDeCaptura = false
+        uri?.let { cargar(it, nombreDe(context, it)) }
+    }
 
     val camara = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicture(),
@@ -226,6 +246,12 @@ private fun AlignScreen(compass: Compass) {
             state.compassAzimuthDeg = az
             state.declinationDeg = compass.declinationDeg
 
+            // primera lectura tras el disparo: esa es la del disparo
+            if (state.esperandoBrujulaDeCaptura && compass.positioned) {
+                state.capturaBrujulaDeg = az
+                state.esperandoBrujulaDeCaptura = false
+            }
+
             // SIEMBRA TARDÍA. Se aplica una sola vez y solo si nadie ha dicho
             // nada mejor: hay foto, la semilla sigue siendo el 0° por defecto,
             // el usuario no ha tocado azimut ni sector, y la declinación ya
@@ -237,7 +263,12 @@ private fun AlignScreen(compass: Compass) {
                 state.seedAzimuth.source == "default" &&
                 !state.azimuthTouched
             ) {
-                sembrarAzimut(state, az, "compass")
+                val delDisparo = state.capturaBrujulaDeg
+                if (delDisparo != null) {
+                    sembrarAzimut(state, delDisparo, "compass")
+                } else {
+                    sembrarAzimut(state, az, "compass_live")
+                }
             }
         }
     }
@@ -265,6 +296,11 @@ private fun AlignScreen(compass: Compass) {
                     context, "${context.packageName}.fileprovider", destino,
                 )
                 cameraUri = uri
+                // La lectura se toma en cuanto el sensor hable DESPUÉS de
+                // disparar, no ahora: ahora el móvil apunta a la pantalla, no a
+                // la montaña. La bandera la resuelve el `onChange` de abajo.
+                state.capturaBrujulaDeg = null
+                state.esperandoBrujulaDeCaptura = true
                 camara.launch(uri)
             }) { Text("Cámara") }
         }
@@ -335,10 +371,102 @@ private fun AlignScreen(compass: Compass) {
         // 1) acotar el sector, PRIMERO
         Text("1 · Arrastra para acotar el sector", fontSize = 12.sp, color = Color(0xFFFFC400))
         SectorStrip(state, Modifier.fillMaxWidth().height(90.dp))
+        // RUMBOS CARDINALES en vez de grados.
+        //
+        // El arrastre pide el sector EN GRADOS, y el usuario no los sabe: nadie
+        // mira una sierra y piensa "eso esta a 40°". Si sabe decir "miraba al
+        // nordeste". Cada boton fija un sector de 90° centrado en su rumbo, que
+        // es lo que acoto bien el caso de Nerja -la respuesta estaba en 40.6° y
+        // el sector del NE va de 0° a 90°-. No hace falta precision, solo
+        // senalar la zona; la precision la pone despues la busqueda.
+        //
+        // El arrastre sigue estando para quien quiera afinar: esto lo
+        // complementa, no lo sustituye.
         Text(
-            "sector ${fmt(state.sectorStartDeg)}° → ${fmt(normalizeAzimuthDeg(state.sectorStartDeg + state.sectorSpanDeg))}°" +
-                "  (${fmt(state.sectorSpanDeg)}° de arco)" +
-                (state.compassAzimuthDeg?.let { "  · brújula ${fmt(it)}° (declinación ${fmt(state.declinationDeg)}°)" } ?: "  · sin brújula"),
+            "¿Hacia dónde miraba la foto?",
+            fontSize = 12.sp, color = Color(0xFFB8C6D4),
+        )
+        val porRumbo = { c: Cardinal ->
+            val (inicio, amplitud) = sectorForCardinal(c)
+            state.sectorStartDeg = inicio
+            state.sectorSpanDeg = amplitud
+            state.azimuthDeg = c.azimuthDeg
+            state.azimuthTouched = true
+            state.status = "Sector acotado al ${c.etiqueta} " +
+                "(${fmt(inicio)}° → ${fmt(normalizeAzimuthDeg(inicio + amplitud))}°)"
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            for (c in Cardinal.entries.take(4)) {
+                OutlinedButton(
+                    onClick = { porRumbo(c) },
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp),
+                ) { Text(c.etiqueta, fontSize = 13.sp) }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            for (c in Cardinal.entries.drop(4)) {
+                OutlinedButton(
+                    onClick = { porRumbo(c) },
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp),
+                ) { Text(c.etiqueta, fontSize = 13.sp) }
+            }
+        }
+
+        // Volver a los 360 NO se puede conseguir arrastrando: el arrastre
+        // produce arcos, nunca el circulo entero, y `sectorToRanges` lee un
+        // arco de mas de 180 grados como el COMPLEMENTARIO. Sin este boton, una
+        // vez acotado el sector no habia camino de vuelta a "no se donde
+        // mirar", que es un estado legitimo.
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = {
+                state.sectorStartDeg = 0.0
+                state.sectorSpanDeg = 360.0
+                state.azimuthTouched = true   // sigue siendo una eleccion suya
+            }) { Text("Todo el horizonte (360°)") }
+        }
+        // El rumbo con NOMBRE, no solo en grados: "159°" no le dice nada a
+        // nadie y "S" sí — y con el nombre el usuario puede DESMENTIR la
+        // lectura ("yo no miraba al sur"), que es algo que un número no
+        // permite. Vale tanto para el sector como para la brújula.
+        val centroSector = normalizeAzimuthDeg(state.sectorStartDeg + state.sectorSpanDeg / 2.0)
+        val rumboSector = if (state.sectorSpanDeg >= 359.0) {
+            "todo el horizonte"
+        } else {
+            "hacia el ${nearestCardinal(centroSector).etiqueta}"
+        }
+        Text(
+            "sector ${fmt(state.sectorStartDeg)}° → " +
+                "${fmt(normalizeAzimuthDeg(state.sectorStartDeg + state.sectorSpanDeg))}°" +
+                "  (${fmt(state.sectorSpanDeg)}° · $rumboSector)",
+            fontSize = 11.sp, color = Color(0xFF8FA3B5), fontFamily = FontFamily.Monospace,
+        )
+        // Que la lectura del disparo quedó registrada tiene que VERSE: es el
+        // dato que hace medible el error del sensor, y si se perdiera en
+        // silencio el usuario exportaría creyendo que lo tiene.
+        state.capturaBrujulaDeg?.let { d ->
+            Text(
+                "brújula EN EL DISPARO ${fmt(d)}° (${nearestCardinal(d).etiqueta}) " +
+                    "· se exporta como semilla `compass`",
+                fontSize = 11.sp, color = Color(0xFF8FD48F),
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+        Text(
+            state.compassAzimuthDeg?.let {
+                "brújula ${fmt(it)}° (${nearestCardinal(it).etiqueta}) · " +
+                    "declinación ${fmt(state.declinationDeg)}°" +
+                    // Cuando la brújula ya sembró el sector, decirlo: los
+                    // botones de rumbo pasan a ser una corrección, no un paso
+                    // obligatorio. Preguntar lo que ya está contestado es
+                    // trabajo que el usuario no debería hacer.
+                    if (state.seedAzimuth.source == "compass" && !state.azimuthTouched) {
+                        "  ← el sector ya viene de aquí"
+                    } else {
+                        ""
+                    }
+            } ?: "sin brújula",
             fontSize = 11.sp, color = Color(0xFF8FA3B5), fontFamily = FontFamily.Monospace,
         )
 

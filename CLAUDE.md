@@ -180,6 +180,36 @@ La primera aserción del criterio de aceptación es, por eso, que el tamaño
 ORIENTADO coincide con el del fixture — antes de mirar ninguna cresta. Si una
 foto girada entrara sin girar, todo lo demás mediría sobre otra imagen.
 
+### Un respaldo silencioso invalida todo guardián de la pieza respaldada
+
+Un mecanismo de respaldo que entra sin avisar convierte a la pieza que
+sustituye en **no verificable**: cualquier test que la vigile pasa a medir el
+respaldo, y lo hace con toda la apariencia de estar activo.
+
+Medido. `build_model_detector` respalda a la heurística cuando `onnxruntime` no
+se puede importar. Es deliberado y está bien para producción: elegir `modelo+dp`
+de defecto no le cuesta nada a quien no tenga la dependencia. Pero el guardián
+`@requiere` comprobaba **la presencia del `.onnx` y no que onnxruntime estuviera
+instalado**, así que con el fichero en su sitio y sin la librería los tres tests
+del modelo se daban por ACTIVOS y comparaban la cresta de la HEURÍSTICA contra
+la referencia del modelo.
+
+Salió al ejecutar la tirada con el intérprete del sistema en vez del del
+`.venv`: 2163 px de desvío en una foto, y la tirada entera en 1,35 s, que no da
+ni para una inferencia. **Ahí el respaldo delató el problema por lo grande.** Con
+una foto donde los dos detectores se parecieran, el caso habría salido verde
+midiendo el detector equivocado.
+
+Regla: **la condición de un guardián tiene que cubrir la pieza ENTERA, no su
+parte visible.** Un fichero de modelo presente no es un modelo ejecutable; un
+paquete descargado no es un paquete legible. Y la pregunta que lo destapa es
+siempre la misma: *si esta dependencia desapareciera, ¿el test se pondría rojo,
+o cambiaría de sujeto sin decirlo?*
+
+Corolario para la app: cada respaldo callado que se añada —detector, paquete,
+posición, brújula— crea este mismo agujero. O el respaldo consta en el
+resultado, o el guardián comprueba que no se ha activado.
+
 ### Otras dos, menores pero medidas
 
 - **El paquete es LITTLE-endian; los `.hgt` son BIG-endian.** Conviven las dos

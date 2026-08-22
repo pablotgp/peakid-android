@@ -16,6 +16,7 @@ import kotlin.math.max
 import kotlin.math.min
 import peakid.engine.align.AlignmentParams
 import peakid.engine.align.projectProfile
+import peakid.engine.align.Cardinal
 import peakid.engine.align.projectedYPerColumn
 import peakid.engine.geo.normalizeAzimuthDeg
 import peakid.engine.geo.wrapDeltaDeg
@@ -258,11 +259,36 @@ fun SectorStrip(
         }
         drawLine(Color(0xFFFFC400), Offset(x0, 0f), Offset(x0, size.height), strokeWidth = 3f)
 
-        // el norte, como referencia fija
-        drawLine(
-            Color(0xFF88A0B8), Offset(0f, 0f), Offset(0f, size.height),
-            strokeWidth = 2f,
-        )
+        // LOS RUMBOS CARDINALES, que es lo que el usuario sabe leer.
+        //
+        // La tira estaba graduada en grados y nadie mira una sierra pensando
+        // "eso está a 40°". Con N/NE/E/... la pregunta "¿hacia dónde miraba la
+        // foto?" pasa a tener una respuesta que se puede señalar.
+        //
+        // El norte va marcado más fuerte porque es el origen del convenio y el
+        // punto por donde el sector puede partirse en dos al dibujarse.
+        val canvas = drawContext.canvas.nativeCanvas
+        val tinta = android.graphics.Paint().apply {
+            color = 0xFFB8C6D4.toInt()
+            textSize = 26f
+            isAntiAlias = true
+            textAlign = android.graphics.Paint.Align.CENTER
+            setShadowLayer(4f, 0f, 0f, 0xFF000000.toInt())
+        }
+        for (c in Cardinal.entries) {
+            val xc = (c.azimuthDeg / 360.0 * size.width).toFloat()
+            val esNorte = c == Cardinal.N
+            drawLine(
+                if (esNorte) Color(0xFFB8C6D4) else Color(0x66B8C6D4),
+                Offset(xc, 0f), Offset(xc, size.height),
+                strokeWidth = if (esNorte) 2f else 1f,
+            )
+            // el norte cae en x=0: su etiqueta se corre adentro para que no se
+            // salga del lienzo por la izquierda
+            val xt = if (esNorte) xc + 14f else xc
+            canvas.drawText(c.etiqueta, xt, 24f, tinta)
+        }
+
         state.compassAzimuthDeg?.let { az ->
             val xb = (az / 360.0 * size.width).toFloat()
             drawLine(Color(0xFF00E5FF), Offset(xb, 0f), Offset(xb, size.height), strokeWidth = 3f)

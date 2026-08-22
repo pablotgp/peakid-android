@@ -87,6 +87,24 @@ class AlignState {
     var crestDetected by mutableStateOf(false)
 
     var compassAzimuthDeg by mutableStateOf<Double?>(null)
+
+    /**
+     * Rumbo de la brújula EN EL DISPARO, solo para fotos hechas con la app.
+     *
+     * Es la ÚNICA vía de tener una lectura de brújula atada a una foto: esta
+     * cámara no escribe `GPSImgDirection` en el EXIF, así que sin esto la
+     * lectura se pierde en cuanto el usuario baja el móvil.
+     *
+     * Y es lo que hace medible el error del sensor: exportada como semilla
+     * junto al azimut que el usuario ajusta a mano, la DIFERENCIA entre las dos
+     * es el error real de la brújula en ese disparo. Con una foto de galería no
+     * existe tal diferencia que medir — la brújula de ahora no dice nada de una
+     * foto de otro día— y por eso esa no se exporta como `compass`.
+     */
+    var capturaBrujulaDeg by mutableStateOf<Double?>(null)
+
+    /** Hay una captura en curso esperando la primera lectura del sensor. */
+    var esperandoBrujulaDeCaptura by mutableStateOf(false)
     var declinationDeg by mutableStateOf(0.0)
 
     // --- procedencia ---
